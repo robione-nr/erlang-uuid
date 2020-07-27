@@ -12,7 +12,7 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([nil/0, new/0, to_string/1, to_binary/1]).
+-export([nil/0, new/0, to_string/1, to_binary/1, sync/0, time_offset/0]).
 -export([v1/0, v2/0, v2/1, v2/2, v3/1, v3/2, v4/0, v5/1, v5/2]).
 
 nil() -> <<0:128>>.
@@ -44,6 +44,8 @@ to_binary(String) ->
 	catch
 		_:_ -> {error, badarg}
 	end.
+
+sync() -> gen_server:cast(?MODULE, offset).
 
 v1() -> gen_server:call(?MODULE, new_v1).
 
@@ -113,17 +115,17 @@ init([]) ->
 	
 	<<ClkSeq:16/integer-unsigned>> = crypto:strong_rand_bytes(2),
 	
-    {ok, {MAC, ClkSeq band 16#3fff}}.
+    {ok, {MAC, ClkSeq band 16#3fff, time_offset()}}.
 
 
 %% handle_call/3
 %% ====================================================================
-handle_call(new_v1, _, {Node, ClkSeq}) ->
-	<<_:4, TH:12, TM:16, TL:32>> = <<(timestamp()):64/integer-unsigned>>,
+handle_call(new_v1, _, {Node, ClkSeq, Offset}) ->
+	<<_:4, TH:12, TM:16, TL:32>> = <<(timestamp(Offset)):64/integer-unsigned>>,
 	Reply = <<TL:32, TM:16, 2#0001:4, TH:12, 2#10:2, ClkSeq:14/integer-unsigned, Node:6/binary>>,
-	{reply, Reply, {Node, (ClkSeq +1) band 16#3fff}};
-handle_call({new_v2, User, Domain}, _, {Node, ClkSeq}) ->
-	<<_:4, TH:12, TM:16, _:32>> = <<(timestamp()):64/integer-unsigned>>,
+	{reply, Reply, {Node, (ClkSeq +1) band 16#3fff, Offset}};
+handle_call({new_v2, User, Domain}, _, {Node, ClkSeq, Offset}) ->
+	<<_:4, TH:12, TM:16, _:32>> = <<(timestamp(Offset)):64/integer-unsigned>>,
 
 	Reply = try
 		UID = list_to_integer(string:chomp(os:cmd("id -ur " ++ User))),
@@ -142,13 +144,15 @@ handle_call({new_v2, User, Domain}, _, {Node, ClkSeq}) ->
 		_:_ -> {error,badarg}
 	end,
 	
-	{reply, Reply, {Node, (ClkSeq +1) band 16#3fff}};
+	{reply, Reply, {Node, (ClkSeq +1) band 16#3fff, Offset}};
 handle_call(_, _, State) ->
     {reply, {error, badarg}, State}.
 
 
 %% handle_cast/2
 %% ====================================================================
+handle_cast(offset, {Node, ClkSeq, _}) ->
+	{noreply, {Node, ClkSeq, time_offset()}};
 handle_cast(_, State) ->
     {noreply, State}.
 
@@ -176,8 +180,11 @@ code_change(_, State, _) ->
 %% Internal functions
 %% ====================================================================
 
-timestamp() ->
-	(erlang:monotonic_time(nanosecond) + 2167963015000000000) div 100.
+time_offset() ->
+	141427 * 86400 * 1000000000 + erlang:time_offset(nanosecond).
+
+timestamp(Offset) ->
+	(erlang:monotonic_time(nanosecond) + Offset) div 100.
 
 vNS(Namespace, Name, Version) ->
 	BinNS = term_to_binary(Namespace),
