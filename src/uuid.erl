@@ -67,30 +67,18 @@ v2(User, Domain) when is_atom(User) ->
 v2(_, _) ->
 	{error, badarg}.
 
-v3(Namespace,Name) ->
-	v3({Namespace, Name}).
+v3(Namespace,Name) ->		vNS(Namespace, Name, 3).
+v3({Namespace, Name}) ->	vNS(Namespace, Name, 3).
 
-v3({Namespace, Name}) -> 
-	BinNS = term_to_binary(Namespace),
-	BinNm = term_to_binary(Name),
+v4() ->
+	<<I:128/unsigned-integer>> = crypto:strong_rand_bytes(16),
+	<<(I band 16#ffffffffffff0fff3fffffffffffffff bor 16#40008000000000000000):128/unsigned-integer>>.
+%	<<P1:48, _:4, P2:12, _:2, P3:62>> = crypto:strong_rand_bytes(16),
+%	<<P1:48, 2#0100:4, P2:12, 2#10:2, P3:62>>.
+
+v5(Namespace,Name) ->		vNS(Namespace, Name, 5).
+v5({Namespace, Name}) ->	vNS(Namespace, Name, 5).
 	
-	<<P1:48, _:4, P2:12, _:2, P3:62>> = crypto:hash(md5, <<BinNS/binary, BinNm/binary>>),
-	<<P1:48, 2#0011:4, P2:12, 2#10:2, P3:62>>.
-
-v4() -> 
-	<<P1:48, _:4, P2:12, _:2, P3:62>> = crypto:strong_rand_bytes(16),
-	<<P1:48, 2#0100:4, P2:12, 2#10:2, P3:62>>.
-
-v5(Namespace,Name) ->
-	v5({Namespace, Name}).
-
-v5({Namespace, Name}) ->
-	BinNS = term_to_binary(Namespace),
-	BinNm = term_to_binary(Name),
-	
-	<<P1:48, _:4, P2:12, _:2, P3:62>> = <<(crypto:hash(sha, <<BinNS/binary, BinNm/binary>>)):128/bits>>,
-	<<P1:48, 2#0101:4, P2:12, 2#10:2, P3:62>>.
-
 %% ====================================================================
 %% Behavioural functions
 %% ====================================================================
@@ -190,3 +178,15 @@ code_change(_, State, _) ->
 
 timestamp() ->
 	(erlang:monotonic_time(nanosecond) + 2167963015000000000) div 100.
+
+vNS(Namespace, Name, Version) ->
+	BinNS = term_to_binary(Namespace),
+	BinNm = term_to_binary(Name),
+
+	Method = case Version of
+	3 ->	md5;
+	5 ->	sha
+	end,
+	
+	<<I:128/unsigned-integer>> = <<(crypto:hash(Method, <<BinNS/binary, BinNm/binary>>)):128/bits>>,
+	<<(I band 16#ffffffffffff0fff3fffffffffffffff bor (Version bsl 76 bor 16#8000000000000000)):128/unsigned-integer>>.
