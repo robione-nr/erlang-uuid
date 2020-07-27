@@ -1,0 +1,3 @@
+-define(UUID_DOMAIN_GROUP, 1).
+-define(UUID_DOMAIN_PERSON, 0).
+-define(UUID_DOMAIN_ALL, 2).
