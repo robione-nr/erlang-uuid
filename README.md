@@ -3,13 +3,14 @@ A simple UUID generator for use in applications.
 
 A gen_server is used only when necessary to generate UUID values (Versions 1, 2), otherwise they are generated via function calls (Versions 3 - 5).
 
-I favor simplicity over strict ahderence. This is a common theme in my projects. As a result it is recommended to use this in new projects or a new instance of projects which hold UUIDs in persistent storage. (Esp. for projects using namespace versions.) This projects implements all five UUID versions and... generally... adheres to RFC 4122.
+I favor simplicity over strict ahderence. This is a common theme in my projects. As a result it is recommended to use this in new projects or a new instance of projects which hold UUIDs in persistent storage. (Esp. for projects using namespace versions.) This project implements all five UUID versions and... generally... adheres to RFC 4122.
 
 ##### General Assumptions:
  - One instance running, although the probability for collisions is probably rather smaller for Version 1.
  - This implementation only considers the Leach-Salz / RFC-4122 & DCE 1.1 UUID variant.
  - The output from requests is binary.
  - UUIDs can be converted to/from binary and string (as lists) formats.
+ - The gen_server is run in the same EVM as calling modules.
 
 ##### Version 1:
  - The clock sequence is always incremented for each UUID requested. This negates determining the resolution of the time source or making conditional checks.
