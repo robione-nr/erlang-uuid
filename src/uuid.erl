@@ -12,7 +12,7 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([nil/0, new/0, to_string/1, to_binary/1, sync/0, time_offset/0]).
+-export([nil/0, new/0, to_string/1, to_binary/1, sync/0]).
 -export([v1/0, v2/0, v2/1, v2/2, v3/1, v3/2, v4/0, v5/1, v5/2]).
 
 nil() -> <<0:128>>.
@@ -97,20 +97,23 @@ start_link(Args) ->
 
 %% init/1
 %% ====================================================================
-init([]) ->
+init(OptList) when is_list(OptList) ->
 	application:start(crypto),
 	
-	<<MAC:6/binary, _/binary>> =
-		try
-			{ok, List} = inet:getifaddrs(),
-			list_to_binary(hd([Addr || {_, Opts} <- List, {hwaddr, Addr} <- Opts,
-							{addr, _} <- Opts, {flags, Flags} <- Opts,
-							lists:member(loopback,Flags) =/= true]
-			))
-		catch
-			_:_ -> 
-				<<P1:7, _:1, P2:40>> = crypto:strong_rand_bytes(6),
-				<<P1:7, 1:1, P2:40>>
+	Bool = proplists:get_bool(privacy,OptList),
+	
+	<<MAC:6/binary, _/binary>> = if
+		Bool =:= false ->
+			try
+				{ok, List} = inet:getifaddrs(),
+				list_to_binary(hd([Addr || {_, Opts} <- List, {hwaddr, Addr} <- Opts,
+								{addr, _} <- Opts, {flags, Flags} <- Opts,
+								lists:member(loopback,Flags) =/= true]
+				))
+			catch
+				_:_ -> random_mac()
+			end;
+		true -> random_mac()
 		end,
 	
 	<<ClkSeq:16/integer-unsigned>> = crypto:strong_rand_bytes(2),
@@ -179,6 +182,10 @@ code_change(_, State, _) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+
+random_mac() ->
+	<<P1:7, _:1, P2:40>> = crypto:strong_rand_bytes(6),
+	<<P1:7, 1:1, P2:40>>.
 
 time_offset() ->
 	141427 * 86400 * 1000000000 + erlang:time_offset(nanosecond).
