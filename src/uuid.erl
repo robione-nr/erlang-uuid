@@ -4,6 +4,7 @@
 
 -module(uuid).
 -behaviour(gen_server).
+
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([start_link/0, start_link/1]).
 
@@ -60,7 +61,7 @@ v2(User) when is_atom(User) ->
 v2(_) ->
 	{error, badarg}.
 
-v2(User, Domain) when is_list(User) andalso Domain >= 0 andalso Domain =<2 ->
+v2(User, Domain) when is_list(User) andalso Domain >= 0 andalso Domain =< ?UUID_DOMAIN_ALL ->
 	gen_server:call(?MODULE, {new_v2, User, Domain});	
 v2(User, Domain) when is_binary(User) ->
 	v2(unicode:characters_to_list(User), Domain);
@@ -169,7 +170,6 @@ handle_info(_, State) ->
 %% terminate/2
 %% ====================================================================
 terminate(_, _) ->
-	application:stop(crypto),
     ok.
 
 
