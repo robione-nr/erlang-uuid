@@ -1,24 +1,34 @@
 %% @author nolan
 %% @doc @todo Add description to uuid.
 
-
 -module(uuid).
 -behaviour(gen_server).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([start_link/0, start_link/1]).
 
--include("../include/uuid.hrl").
+-compile(inline).
+
+%% Build internal "unused" functions
+-export([v1/3, v4/0]).
 
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([nil/0, new/0, to_string/1, to_binary/1, sync/0]).
--export([v1/0, v2/0, v2/1, v2/2, v3/1, v3/2, v4/0, v5/1, v5/2]).
+-export([nil/0, new/0, new/1, new/2, to_string/1, to_binary/1, sync/0, setopt/1]).
 
 nil() -> <<0:128>>.
 
-new() -> v4().
+new() ->
+	gen_server:call(?MODULE, {new_uuid, 1}).
+
+new(N) when is_integer(N) andalso N > 0 ->
+	gen_server:call(?MODULE, {new_uuid, N});
+new(_) ->
+	{error, badarg}.
+
+new(NS, N) ->
+	gen_server:call(?MODULE, {new_uuid,NS,N}).
 
 to_string(<<_:128>> = UUID) ->
 	<<Int:128/integer-unsigned>> = UUID,
@@ -46,41 +56,14 @@ to_binary(String) ->
 		_:_ -> {error, badarg}
 	end.
 
-sync() -> gen_server:cast(?MODULE, offset).
+sync() -> gen_server:cast(?MODULE, calc_offset).
 
-v1() -> gen_server:call(?MODULE, new_v1).
-
-v2() -> v2([], ?UUID_DOMAIN_ALL).
-
-v2(User) when is_list(User) ->
-	gen_server:call(?MODULE, {new_v2, User, ?UUID_DOMAIN_ALL});	
-v2(User) when is_binary(User) ->
-	v2(unicode:characters_to_list(User));
-v2(User) when is_atom(User) ->
-	v2(atom_to_binary(User, utf8));
-v2(_) ->
+setopt(Param = {version, V}) when is_integer(V) andalso V >= 1 andalso V =< 5 ->
+	gen_server:call(?MODULE, Param);
+setopt(Param = {privacy, V}) when is_boolean(V) ->
+	gen_server:cast(?MODULE, Param);
+setopt(_) ->
 	{error, badarg}.
-
-v2(User, Domain) when is_list(User) andalso Domain >= 0 andalso Domain =< ?UUID_DOMAIN_ALL ->
-	gen_server:call(?MODULE, {new_v2, User, Domain});	
-v2(User, Domain) when is_binary(User) ->
-	v2(unicode:characters_to_list(User), Domain);
-v2(User, Domain) when is_atom(User) ->
-	v2(atom_to_binary(User, utf8), Domain);
-v2(_, _) ->
-	{error, badarg}.
-
-v3(Namespace,Name) ->		vNS(Namespace, Name, 3).
-v3({Namespace, Name}) ->	vNS(Namespace, Name, 3).
-
-v4() ->
-	<<I:128/unsigned-integer>> = crypto:strong_rand_bytes(16),
-	<<(I band 16#ffffffffffff0fff3fffffffffffffff bor 16#40008000000000000000):128/unsigned-integer>>.
-%	<<P1:48, _:4, P2:12, _:2, P3:62>> = crypto:strong_rand_bytes(16),
-%	<<P1:48, 2#0100:4, P2:12, 2#10:2, P3:62>>.
-
-v5(Namespace,Name) ->		vNS(Namespace, Name, 5).
-v5({Namespace, Name}) ->	vNS(Namespace, Name, 5).
 	
 %% ====================================================================
 %% Behavioural functions
@@ -101,80 +84,66 @@ start_link(Args) ->
 init(OptList) when is_list(OptList) ->
 	application:start(crypto),
 	
-	Bool = proplists:get_bool(privacy,OptList),
+	Version = proplists:get_value(version,OptList,v1),
 	
-	<<MAC:6/binary, _/binary>> = if
-		Bool =:= false ->
-			try
-				{ok, List} = inet:getifaddrs(),
-				list_to_binary(hd([Addr || {_, Opts} <- List, {hwaddr, Addr} <- Opts,
-								{addr, _} <- Opts, {flags, Flags} <- Opts,
-								lists:member(loopback,Flags) =/= true]
-				))
-			catch
-				_:_ -> random_mac()
-			end;
-		true -> random_mac()
-		end,
+	PrivMAC = case proplists:is_defined(privacy, OptList) of
+				  true -> proplists:get_bool(privacy,OptList);
+				  false -> true
+			  end,
+	
+	NodeID = get_node(PrivMAC),
 	
 	<<ClkSeq:16/integer-unsigned>> = crypto:strong_rand_bytes(2),
 	
-    {ok, {MAC, ClkSeq band 16#3fff, time_offset()}}.
+    {ok, {Version, NodeID, ClkSeq band 16#3fff, time_offset()}}.
 
 
 %% handle_call/3
 %% ====================================================================
-handle_call(new_v1, _, {Node, ClkSeq, Offset}) ->
-	<<_:4, TH:12, TM:16, TL:32>> = <<(timestamp(Offset)):64/integer-unsigned>>,
-	Reply = <<TL:32, TM:16, 2#0001:4, TH:12, 2#10:2, ClkSeq:14/integer-unsigned, Node:6/binary>>,
-	{reply, Reply, {Node, (ClkSeq +1) band 16#3fff, Offset}};
-handle_call({new_v2, User, Domain}, _, {Node, ClkSeq, Offset}) ->
-	<<_:4, TH:12, TM:16, _:32>> = <<(timestamp(Offset)):64/integer-unsigned>>,
+handle_call({new_uuid, N}, _, {v4,_,_,_} = State) ->
+	{reply, iterate({v4,[]},[],N), State};
 
-	Reply = try
-		UID = list_to_integer(string:chomp(os:cmd("id -ur " ++ User))),
-		GID = list_to_integer(string:chomp(os:cmd("id -gr " ++ User))),
-	
-		TL = case Domain of
-		?UUID_DOMAIN_ALL -> <<(GID):16/integer-unsigned, (UID):16/integer-unsigned>>;
-		?UUID_DOMAIN_GROUP -> <<(GID):32/integer-unsigned>>;
-		?UUID_DOMAIN_PERSON -> <<(UID):32/integer-unsigned>>
-		end,
-	
-		<<TL:4/binary, TM:16, 2#0010:4, TH:12, 2#10:2, 
-		  ClkSeq:6/integer, Domain:8/integer, Node:6/binary>>
-	
-	catch
-		_:_ -> {error,badarg}
-	end,
-	
-	{reply, Reply, {Node, (ClkSeq +1) band 16#3fff, Offset}};
+handle_call({new_uuid, N}, _, State = {v1, Node, ClkSeq, Offset}) ->
+	{reply, iterate({v1,[Node, ClkSeq, Offset]}, [],N), State};
+
+handle_call({new_uuid, NS, N}, _, {v3,_,_,_} = State) ->
+	{reply, vNS(NS,N,3), State};
+
+handle_call({new_uuid, NS, N}, _, {v5,_,_,_} = State) ->
+	{reply, vNS(NS,N,5), State};
+
+handle_call({version, N}, _, {Version, Node, ClkSeq, Offset}) ->
+	{Reply, NewVer} =
+			try
+				{ok, list_to_existing_atom([$v|integer_to_list(N)])}
+			catch
+				_:_ -> {{error, undef}, Version}
+			end,
+				
+	{reply, Reply, {NewVer, Node, ClkSeq, Offset}};
+
 handle_call(_, _, State) ->
     {reply, {error, badarg}, State}.
 
 
 %% handle_cast/2
 %% ====================================================================
-handle_cast(offset, {Node, ClkSeq, _}) ->
-	{noreply, {Node, ClkSeq, time_offset()}};
+handle_cast(calc_offset, {Version, Node, ClkSeq, _}) ->
+	{noreply, {Version, Node, ClkSeq, time_offset()}};
+handle_cast({privacy, V}, {Version, _, ClkSeq, Offset}) ->
+	{noreply, {Version, get_node(V), ClkSeq, Offset}};
 handle_cast(_, State) ->
     {noreply, State}.
 
 
-%% handle_info/2
+%% Placeholders
 %% ====================================================================
 handle_info(_, State) ->
     {noreply, State}.
 
-
-%% terminate/2
-%% ====================================================================
 terminate(_, _) ->
     ok.
 
-
-%% code_change/3
-%% ====================================================================
 code_change(_, State, _) ->
     {ok, State}.
 
@@ -183,15 +152,54 @@ code_change(_, State, _) ->
 %% Internal functions
 %% ====================================================================
 
-random_mac() ->
+%% Loop
+iterate(_, Acc, 0) -> 
+	Acc;
+iterate(MFA = {F, A}, Acc, N) ->
+	iterate(MFA, [erlang:apply(?MODULE, F,A) | Acc], N-1).
+
+%% Node Stuff
+get_node(Private) ->
+	case Private of
+		true -> random_nodeid();
+		false -> 
+			try
+				{ok, List} = inet:getifaddrs(),
+				
+				<<NodeID:6/binary, _/binary>> =
+					
+				list_to_binary(hd([Addr || {_, Opts} <- List, {hwaddr, Addr} <- Opts,
+								{addr, _} <- Opts, {flags, Flags} <- Opts,
+								lists:member(loopback,Flags) =/= true]
+				)),
+				
+				NodeID
+			catch
+				_:_ -> random_nodeid()
+			end
+	end.
+
+random_nodeid() ->
 	<<P1:7, _:1, P2:40>> = crypto:strong_rand_bytes(6),
 	<<P1:7, 1:1, P2:40>>.
 
+%% Time Stuff
 time_offset() ->
-	141427 * 86400 * 1000000000 + erlang:time_offset(nanosecond).
+	%% 141427 		*	86400	*	1000000000
+	%% 1582 - Epoch		Sec/Day		NanoS/Sec
+	12219292800000000000 + erlang:time_offset(nanosecond).
 
 timestamp(Offset) ->
 	(erlang:monotonic_time(nanosecond) + Offset) div 100.
+
+%% UUID Versions
+v1(Node, ClkSeq, Offset) ->
+	<<_:4, TH:12, TM:16, TL:32>> = <<(timestamp(Offset)):64/integer-unsigned>>,
+	<<TL:32, TM:16, 2#0001:4, TH:12, 2#10:2, ClkSeq:14/integer-unsigned, Node:6/binary>>.
+
+v4() ->
+	<<I:128/unsigned-integer>> = crypto:strong_rand_bytes(16),
+	<<(I band 16#ffffffffffff0fff3fffffffffffffff bor 16#40008000000000000000):128/unsigned-integer>>.
 
 vNS(Namespace, Name, Version) ->
 	BinNS = term_to_binary(Namespace),

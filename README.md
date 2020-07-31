@@ -1,63 +1,50 @@
 # Erlang - UUID Server
 A simple UUID generator for use in applications.
 
-A gen_server is used only when necessary to generate UUID values (Versions 1, 2), otherwise they are generated via function calls (Versions 3 - 5).
+This project implements most UUID versions and... generally... adheres to RFC 4122. In this revision the API has been simplified and the version 2 UUID implementation has been removed. All UUID generation is done through a gen_server. Requests for V1 and V4 UUIDs can be batched. The last change is the ability to set two options: MAC privacy and UUID version utilized.
 
-I favor simplicity over strict ahderence. This is a common theme in my projects. As a result it is recommended to use this in new projects or a new instance of projects which hold UUIDs in persistent storage. (Esp. for projects using namespace versions.) This project implements all five UUID versions and... generally... adheres to RFC 4122.
+I favor simplicity over strict ahderence, a common theme in my projects. Due to how namespace UUIDs are generated, it is recommended to use this in new projects or a new instance of projects which hold UUIDs in persistent storage. 
 
 #### General Behavior / Assumptions:
- - One instance running. The probability for collisions in V1 UUIDs for multiple instances is probably irrelevant. The ClkSeq field usage differs slightly from the RFC (see below).
- - This implementation only considers the Leach-Salz / RFC-4122 & DCE 1.1 UUID variant.
+ - One instance running over complete system; used in one EVM.
+ - This implementation only considers the Leach-Salz / RFC-4122 UUID variant.
  - The output is binary, not strings.
  - UUIDs can be converted to/from binary and string (as lists) formats.
- - The gen_server is run in the same EVM as calling modules.
 
 #### Version 1:
- - The clock sequence is always incremented for each UUID requested. This negates determining the resolution of the time source or making conditional checks.
- - The MAC address is used as a node identifier unless one cannot be determined.
- - Can opt for random node ID during gen_server start.
- 
-#### Version 2:
- - As above in V1.
- - Functions only in Linux environments.
- - Since UIDs and GIDs tend to be "smaller" integers, the option is provided to integrate both into the UUID. This is also the default behavior.
- - Accepts lists, binaries and atoms to indicate the user/group. The preferred term is a list.
- 
+ - The clock sequence remains constant. No collisions can be produced at current CPU clock speeds.
+ - Unless specified during start up a random node ID will be used instead of the MAC address.
+  
 #### Version 4:
  - As per RFC 4122.
  
 #### Version 3/5:
  - Erlang defaults to network byte order and is considered as the "native environment." No byte order conversions are done.
- - As per the RFC "The concept of a name and name space should be broadly construed..." Any erlang term can be used as a name or name space. The hash function is passed <<term_to_binary(NameSpace)/binary, term_to_binary(Name)/binary>>.
- - Erlang terms, not UUIDs, are used as name space identifiers. No predetermined values are used (RFC 4122 Appendix C). Large divergence from the RFC.
+ - As per the RFC "The concept of a name and name space should be broadly construed..." Any erlang term can be used as a name or name space. The hash function is passed <<term_to_binary(NameSpace), term_to_binary(Name)>>.
+ - Erlang terms, not UUIDs, are used as name space identifiers. No predetermined values are used (RFC 4122 Appendix C).
 
 ### Usage
 
-Starting (only for V1 or V2 UUIDs):
+Starting:
  - start_link/0: Equivalent to [].
- - start_link([]): Uses MAC in V1 UUID.
- - start_link([{privacy, true|false}]): Uses random node ID in V1.
+ - start_link([Options]): 
+ 
+Options:
+ - _(empty)_: Default behavior - UUID V1; hidden MAC.
+ - {privacy, true|false}: Uses MAC or random node ID for V1.
+ - {version, 1 - 5}: Sets UUID generation method.
 
-General use API:
+API:
 
  - nil/0: Returns <<0:128>>
- - new/0: Returns one Version 4 UUID
+ - new/0: Returns one V1 or V4 UUID in a list; gen_server state must indicate v1 or v4.
+ - new/1: Returns _n_ V1 or V4 UUIDs in a list; (as above).
+ - new/2: Returns a V3 or V5 namespace UUID; gen_server state must indicate v3 or v5.
+ - setopt/1: Set MAC privacy for subsequent UUID generation; sets version for UUID generation.
  - to_string/1: Returns list representation of binary UUID in proper text format.
  - to_binary/1: Returns binary representation of text (as list) formatted UUID.
  - sync/0: Indicates to gen_server to recompute time offset used in time-based UUIDs.
- 
-Specific Versions:
-
- - v1/0: Returns one Version 1 UTC/MAC UUID
- - v2/0: Version 2 UUID generated using gid/uid of user that invoked the EVM.
- - v2/1: Specify alternate user. Uses GID/UID hybrid.
- - v2/2: Specify the domain using the constant (UUID_DOMAIN_ +): GROUP, USER, ALL.
- - v3/1: Generate name-based UUID with name space and name passed in a tuple.
- - v3/2: Name space and Name passed as separate parameters.
- - v4/0: Generate Version 4 random UUID.
- - v5/1: See v3/1.
- - v5/2: See v3/2.
- 
+  
 ### References
 
 [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc4122)
